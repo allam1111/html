@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Space Shooter - لعبة حقيقية</title>
+<style>
+  :root{
+    --bg:#03020b;
+    --neon1:#00eaff;
+    --neon2:#bc00ff;
+    --glass: rgba(255,255,255,0.04);
+    --card:#071026;
+  }
+  html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial}
+  body{
+    background:
+      radial-gradient(800px 400px at 10% 10%, rgba(124,92,255,0.06), transparent 6%),
+      radial-gradient(700px 350px at 90% 90%, rgba(0,188,212,0.04), transparent 6%),
+      var(--bg);
+    color:#fff;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:18px;
+  }
+
+  .wrap{
+    width:100%;
+    max-width:1100px;
+    border-radius:12px;
+    overflow:hidden;
+    box-shadow: 0 8px 40px rgba(2,6,23,0.7);
+    border:1px solid rgba(255,255,255,0.04);
+    background:linear-gradient(180deg, rgba(255,255,255,0.02), transparent);
+    position:relative;
+  }
+
+  header.ui{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    padding:12px 18px;
+    gap:12px;
+  }
+  .title{font-weight:800;font-size:18px;letter-spacing:0.6px}
+  .hud{display:flex;gap:12px;align-items:center}
+  .badge{
+    background:var(--card);
+    padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.03);
+    color:#cfeffd;font-weight:600;font-size:14px;
+  }
+
+  /* canvas area */
+  .game-area{background:linear-gradient(180deg, rgba(0,0,0,0.2), rgba(0,0,0,0.4));position:relative;}
+  canvas{display:block;width:100%;height:640px;background:transparent;display:block}
+
+  /* overlay messages */
+  .overlay{
+    position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;
+  }
+  .panel{
+    pointer-events:auto;
+    background:linear-gradient(90deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+    border-radius:10px;padding:18px 26px;border:1px solid rgba(255,255,255,0.04);
+    text-align:center;
+  }
+  .btn{
+    display:inline-block;margin-top:12px;padding:10px 18px;border-radius:10px;border:0;cursor:pointer;
+    background:linear-gradient(90deg,var(--neon2),var(--neon1));color:#000;font-weight:800;
+    box-shadow:0 8px 30px rgba(124,92,255,0.15);
+  }
+
+  .controls{
+    font-size:13px;color:rgba(255,255,255,0.7);
+    margin-top:8px;
+  }
+
+  footer.note{padding:10px 18px;color:rgba(255,255,255,0.5);font-size:13px;text-align:center}
+
+  @media (max-width:720px){
+    canvas{height:520px}
+    .hud{flex-direction:column;align-items:flex-end}
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap" id="wrap">
+  <header class="ui">
+    <div>
+      <div class="title">⚡ Neon Space Shooter</div>
+      <div style="font-size:12px;color:rgba(255,255,255,0.6)">حارب الأمواج واحصل على أعلى نتيجة</div>
+    </div>
+
+    <div class="hud">
+      <div class="badge" id="score">النقاط: 0</div>
+      <div class="badge" id="lives">حياة: 3</div>
+      <div class="badge" id="level">المستوى: 1</div>
+    </div>
+  </header>
+
+  <div class="game-area">
+    <canvas id="c" width="1100" height="640"></canvas>
+
+    <div class="overlay" id="overlay">
+      <div class="panel" id="panel">
+        <h2 style="margin:0 0 6px">اضغط ابدأ للعب</h2>
+        <div class="controls">تحكم: ← → أو A D — إطلاق: مسافة</div>
+        <button class="btn" id="startBtn">ابدأ</button>
+      </div>
+    </div>
+  </div>
+
+  <footer class="note">مصممة باستخدام HTML5 Canvas — تقدر تطور الشخصيات، الأصوات، والـlevels بسهولة.</footer>
+</div>
+
+<script>
+/* ====== إعداد اللعبة ====== */
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W = canvas.width, H = canvas.height;
+
+const scoreEl = document.getElementById('score');
+const livesEl = document.getElementById('lives');
+const levelEl = document.getElementById('level');
+const overlay = document.getElementById('overlay');
+const panel = document.getElementById('panel');
+const startBtn = document.getElementById('startBtn');
+
+let keys = {};
+let player, bullets = [], enemies = [], particles = [];
+let score = 0, lives = 3, level = 1;
+let spawnTimer = 0, spawnInterval = 80; // frames
+let gameOver = false;
+let running = false;
+
+/* WebAudio لاصوات بسيطة */
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+let audioCtx = null;
+function playTone(f, t=0.06, type='sine', vol=0.08){
+  if(!audioCtx) audioCtx = new AudioCtx();
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type; o.frequency.value = f;
+  g.gain.value = vol;
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start(); o.stop(audioCtx.currentTime + t);
+}
+
+/* ====== مكونات اللعبة ====== */
+class Player {
+  constructor(){
+    this.w = 56; this.h = 36;
+    this.x = (W - this.w) / 2;
+    this.y = H - this.h - 34;
+    this.speed = 6;
+    this.cool = 0;
+  }
+  update(){
+    if(keys['ArrowLeft'] || keys['a'] || keys['A']) this.x -= this.speed;
+    if(keys['ArrowRight'] || keys['d'] || keys['D']) this.x += this.speed;
+    this.x = Math.max(8, Math.min(W - this.w - 8, this.x));
+    if(this.cool > 0) this.cool--;
+  }
+  draw(){
+    // ship body (neon triangle)
+    ctx.save();
+    ctx.translate(this.x + this.w/2, this.y + this.h/2);
+    // glow
+    ctx.fillStyle = 'rgba(0,234,255,0.08)';
+    ctx.beginPath(); ctx.ellipse(0,8,70,24,0,0,Math.PI*2); ctx.fill();
+    // ship
+    ctx.fillStyle = '#00eaff';
+    ctx.beginPath();
+    ctx.moveTo(-22,12);
+    ctx.lineTo(0,-18);
+    ctx.lineTo(22,12);
+    ctx.closePath();
+    ctx.fill();
+    // cockpit
+    ctx.fillStyle = '#07080b';
+    ctx.fillRect(-10, -2, 20, 10);
+    // neon stroke
+    ctx.strokeStyle = '#bc00ff';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.restore();
+  }
+  shoot(){
+    if(this.cool === 0){
+      bullets.push(new Bullet(this.x + this.w/2, this.y));
+      this.cool = 10; // rate
+      playTone(900,0.04,'square',0.06);
+    }
+  }
+}
+
+class Bullet {
+  constructor(x,y){
+    this.x = x; this.y = y; this.r = 5; this.speed = 10;
+  }
+  update(){ this.y -= this.speed; }
+  draw(){
+    ctx.beginPath();
+    ctx.fillStyle = '#00eaff';
+    ctx.arc(this.x, this.y, this.r, 0, Math.PI*2);
+    ctx.fill();
+    ctx.closePath();
+    // tail
+    ctx.beginPath();
+    ctx.fillStyle = 'rgba(0,234,255,0.12)';
+    ctx.ellipse(this.x, this.y+8, 8, 3, 0, 0, Math.PI*2);
+    ctx.fill();
+  }
+}
+
+class Enemy {
+  constructor(x,y,type=0){
+    this.x = x; this.y = y; this.w = 46; this.h = 34;
+    this.speed = 1 + 0.2 * level + Math.random()*0.6;
+    this.hp = 1 + Math.floor(level/2);
+    this.type = type;
+    this.dir = Math.random() < 0.5 ? -1 : 1;
+    this.osc = Math.random()*Math.PI*2;
+  }
+  update(){
+    this.y += this.speed;
+    this.x += Math.sin((this.y/30) + this.osc) * 1.8 * this.dir;
+  }
+  draw(){
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    // body
+    ctx.fillStyle = '#ff5bd7';
+    ctx.fillRect(-this.w/2, -this.h/2, this.w, this.h);
+    // inner
+    ctx.fillStyle = '#0b0010';
+    ctx.fillRect(-this.w/2+8, -this.h/2+8, this.w-16, this.h-16);
+    // neon stroke
+    ctx.strokeStyle = '#00eaff';
+    ctx.lineWidth = 1.6;
+    ctx.strokeRect(-this.w/2, -this.h/2, this.w, this.h);
+    ctx.restore();
+  }
+}
+
+/* particle for explosion */
+class Particle {
+  constructor(x,y,color){
+    this.x=x;this.y=y; this.vx=(Math.random()-0.5)*6; this.vy=(Math.random()-0.5)*6;
+    this.life=40+Math.random()*20; this.color=color;
+  }
+  update(){ this.x+=this.vx; this.y+=this.vy; this.vy+=0.12; this.life--; }
+  draw(){
+    ctx.globalAlpha = Math.max(0, this.life/60);
+    ctx.fillStyle = this.color; ctx.fillRect(this.x,this.y,3,3);
+    ctx.globalAlpha = 1;
+  }
+}
+
+/* ====== منطق اللعبة ====== */
+function spawnEnemy(){
+  let count = 1 + Math.floor(level/2);
+  for(let i=0;i<count;i++){
+    let x = 60 + Math.random()*(W-120);
+    enemies.push(new Enemy(x, -40));
+  }
+}
+
+function resetGame(){
+  bullets = []; enemies = []; particles = [];
+  score = 0; lives = 3; level = 1; spawnInterval = 80;
+  player = new Player();
+  updateUI();
+  gameOver = false;
+}
+
+function updateUI(){
+  scoreEl.innerText = 'النقاط: ' + score;
+  livesEl.innerText = 'حياة: ' + lives;
+  levelEl.innerText = 'المستوى: ' + level;
+}
+
+/* collision rectangle approx */
+function rectColl(a,b){
+  return !(a.x + (a.w||a.r) < b.x - (b.w||b.r)
+        || a.x - (a.w||a.r) > b.x + (b.w||b.r)
+        || a.y + (a.h||a.r) < b.y - (b.h||b.r)
+        || a.y - (a.h||a.r) > b.y + (b.h||b.r));
+}
+
+/* افعال عند ضرب عدو */
+function explodeAt(x,y,color='#ffcaef'){
+  playTone(180 + Math.random()*400,0.08,'sawtooth',0.08);
+  for(let i=0;i<18;i++) particles.push(new Particle(x + (Math.random()-0.5)*20, y + (Math.random()-0.5)*20, color));
+}
+
+/* ====== حلقة اللعبة ====== */
+function update(){
+  if(!running) return;
+  // clear
+  ctx.clearRect(0,0,W,H);
+
+  // background subtle grid
+  drawBackground();
+
+  // spawn logic
+  spawnTimer++;
+  if(spawnTimer > spawnInterval){
+    spawnTimer = 0;
+    spawnEnemy();
+    if(spawnInterval > 30) spawnInterval -= 1; // يزداد الصعوبة تدريجيا
+  }
+
+  // update player
+  player.update();
+  player.draw();
+
+  // bullets
+  for(let i=bullets.length-1;i>=0;i--){
+    let b = bullets[i];
+    b.update(); b.draw();
+    if(b.y < -10) bullets.splice(i,1);
+  }
+
+  // enemies
+  for(let i=enemies.length-1;i>=0;i--){
+    let en = enemies[i];
+    en.update(); en.draw();
+
+    // reach bottom -> damage player
+    if(en.y > H + 40){
+      enemies.splice(i,1);
+      lives -= 1;
+      updateUI();
+      playTone(120,0.12,'sine',0.16);
+      if(lives <= 0) endGame();
+      continue;
+    }
+
+    // collision with bullets
+    for(let j=bullets.length-1;j>=0;j--){
+      let b = bullets[j];
+      // approximate rect collision
+      if(Math.abs(b.x - en.x) < 36 && Math.abs(b.y - en.y) < 30){
+        bullets.splice(j,1);
+        en.hp -= 1;
+        explodeAt(b.x,b.y,'#00eaff');
+        if(en.hp <= 0){
+          enemies.splice(i,1);
+          score += 10;
+          // maybe level up
+          if(score % 200 === 0){ level++; spawnInterval = Math.max(30, spawnInterval-6); playTone(900,0.12,'triangle',0.12); }
+          updateUI();
+        } else {
+          playTone(700,0.06,'sawtooth',0.06);
+        }
+        break;
+      }
+    }
+
+    // collision with player
+    if(Math.abs(player.x + player.w/2 - en.x) < 40 && Math.abs(player.y + player.h/2 - en.y) < 38){
+      // hit
+      explodeAt(player.x + player.w/2, player.y + player.h/2,'#ffae00');
+      enemies.splice(i,1);
+      lives -= 1; updateUI();
+      if(lives <= 0) endGame();
+    }
+  }
+
+  // particles
+  for(let i=particles.length-1;i>=0;i--){
+    particles[i].update();
+    particles[i].draw();
+    if(particles[i].life <= 0) particles.splice(i,1);
+  }
+
+  // HUD glow
+  drawHUDGlow();
+
+  requestAnimationFrame(update);
+}
+
+function drawBackground(){
+  // starfield
+  ctx.save();
+  let grad = ctx.createLinearGradient(0,0,0,H);
+  grad.addColorStop(0,'rgba(124,92,255,0.03)'); grad.addColorStop(1,'rgba(0,0,0,0.08)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0,0,W,H);
+
+  // moving small stars
+  ctx.fillStyle = 'rgba(255,255,255,0.06)';
+  for(let i=0;i<60;i++){
+    let sx = (i*73 + Date.now()/15) % W;
+    let sy = (i*49 + (Date.now()/23)) % H;
+    ctx.fillRect(sx, sy, 1.2, 1.2);
+  }
+  ctx.restore();
+}
+
+function drawHUDGlow(){
+  // subtle neon line at bottom
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,234,255,0.03)';
+  ctx.fillRect(0,H-12,W,12);
+  ctx.restore();
+}
+
+/* ====== controls ====== */
+window.addEventListener('keydown', (e)=> {
+  keys[e.key] = true;
+  // shoot
+  if(e.code === 'Space' || e.key === ' '){
+    if(!running) return;
+    player.shoot();
+  }
+});
+window.addEventListener('keyup', (e)=> { keys[e.key] = false; });
+
+/* resizing (canvas uses fixed internal resolution but scales) */
+function resize(){
+  // keep W,H as canvas internal pixel size; we set them fixed for deterministic gameplay
+}
+resize();
+
+/* ====== game flow ====== */
+function start(){
+  overlay.style.display = 'none';
+  running = true;
+  if(!audioCtx) audioCtx = new AudioCtx();
+  if(!player) player = new Player();
+  requestAnimationFrame(update);
+}
+
+function endGame(){
+  running = false;
+  gameOver = true;
+  overlay.style.display = 'flex';
+  panel.innerHTML = '<h2>انتهت اللعبة</h2><div class="controls">النقاط: ' + score + '</div><button class="btn" id="restartBtn">إعادة المحاولة</button>';
+  document.getElementById('restartBtn').addEventListener('click', ()=> {
+    resetGame();
+    overlay.style.display = 'none';
+    running = true;
+    requestAnimationFrame(update);
+  });
+}
+
+/* start button */
+startBtn.addEventListener('click', ()=> {
+  resetGame();
+  overlay.style.display = 'none';
+  running = true;
+  requestAnimationFrame(update);
+});
+
+/* load initial UI */
+resetGame();
+
+</script>
+</body>
+</html>
